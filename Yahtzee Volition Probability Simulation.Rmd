@@ -1,4 +1,4 @@
-# Yahtzee Volition 1 Simulator
+# Yahtzee Volition 1 Simulation
 
 Only Even (2,4,6)
 
@@ -23,9 +23,7 @@ dice_to_string <- function(d) paste0("[", paste(d, collapse = ","), "]")
 
 ```
 
-
-One hand simulation (up to 3 rolls total)
-Returns list(success, final_dice, score_if_success, log)
+One hand simulation (up to 3 rolls total) Returns list(success, final_dice, score_if_success, log)
 
 ```{r}
 play_single_hand_volition1 <- function(target_faces = c(2,4,6),
@@ -96,8 +94,8 @@ play_single_hand_volition1 <- function(target_faces = c(2,4,6),
 }
 ```
 
+### N trials wrapper
 
-# N trials wrapper
 Simulate many hands; print logs for the first `print_first` trials.
 
 ```{r}
@@ -166,18 +164,323 @@ simulate_volition1 <- function(n_trials = 1000,
 ## Simulations
 
 Even
+
 ```{r}
-simulate_volition1(n_trials = 1000, target_faces = c(2,4,6), seed = 123, print_first = 3)
+simulate_volition1(n_trials = 1000, target_faces = c(2,4,6),print_first = 3)
 ```
 
 Odd
+
 ```{r}
 simulate_volition1(n_trials = 1000, target_faces = c(1,3,5), seed = 123, print_first = 3)
 ```
 
 Prime
+
 ```{r}
-simulate_volition1(n_trials = 1000, target_faces = c(2,3,5), seed = 123, print_first = 3)
+simulate_volition1(n_trials = 1000, target_faces = c(2,3,5), print_first = 3)
 ```
 
+# Volition 1 Bonus Simulation.
+
+
+Yahtzee Volition 1 — Three-Consecutive-Turns Streak Simulator
+Categories: Only Even (2,4,6), Only Odd (1,3,5), Only Prime (2,3,5)
+
+Strategy:
+* Start each turn fresh.
+* Roll 5 dice: choose target category among remaining {EVEN, ODD, PRIME}
+  * choose by MAX count of matching faces on the first roll
+  * tie-break by MAX sum of matching faces (on that first roll)
+  * final tie-break: random among tied
+* Keep all dice matching the chosen category; re-roll the rest, up to 3 total rolls
+* If a turn fails, the streak attempt ends (failure)
+* If all 3 turns succeed consecutively, it's a streak success
+* Report success rate and average pre-bonus Volition-1 total for successful streaks
+  
+  
+```{r}
+# ---------- Utilities ----------
+roll_dice <- function(n) sample(1:6, size = n, replace = TRUE)
+dice_to_string <- function(d) paste0("[", paste(d, collapse = ","), "]")
+
+is_success_for_target <- function(dice, target_faces) {
+  all(dice %in% target_faces)
+}
+
+keep_for_target <- function(dice, target_faces) {
+  dice[dice %in% target_faces]
+}
+
+# Targets map
+TARGETS <- list(
+  EVEN  = c(2,4,6),
+  ODD   = c(1,3,5),
+  PRIME = c(2,3,5)
+)
+```
+
+### Choose target from first roll 
+remaining_targets: character vector subset of names(TARGETS)
+Returns list(name, faces, first_roll_info)
+  
+```{r}
+choose_target_from_first_roll <- function(first_roll, remaining_targets) {
+  # Count matches and sum matches on the first roll for each candidate
+  counts <- sapply(remaining_targets, function(nm) sum(first_roll %in% TARGETS[[nm]]))
+  sums   <- sapply(remaining_targets, function(nm) sum(first_roll[first_roll %in% TARGETS[[nm]]]))
+  
+  max_count <- max(counts)
+  idx_count <- which(counts == max_count)
+  
+  if (length(idx_count) == 1) {
+    chosen <- remaining_targets[idx_count]
+  } else {
+    # tie by sum of matching faces
+    tie_targets <- remaining_targets[idx_count]
+    tie_sums <- sums[idx_count]
+    max_sum <- max(tie_sums)
+    idx_sum <- which(tie_sums == max_sum)
+    if (length(idx_sum) == 1) {
+      chosen <- tie_targets[idx_sum]
+    } else {
+      # still tied — pick randomly among them
+      chosen <- sample(tie_targets[idx_sum], size = 1)
+    }
+  }
+  
+  list(
+    name = chosen,
+    faces = TARGETS[[chosen]],
+    info = list(counts = counts, sums = sums)
+  )
+}
+```
+
+
+### Play a single turn for a chosen (or to-be-chosen) target 
+If target_name is NULL, we choose it from the first roll among remaining_targets.
+Returns: list(success, category_name, final_dice, score_if_success, log)
+
+```{r}
+play_single_turn_volition1 <- function(remaining_targets,
+                                       target_name = NULL,
+                                       max_rolls = 3,
+                                       verbose = FALSE) {
+  logs <- character()
+  
+  # Roll 1
+  dice <- roll_dice(5)
+  if (is.null(target_name)) {
+    choice <- choose_target_from_first_roll(dice, remaining_targets)
+    target_name  <- choice$name
+    target_faces <- choice$faces
+    if (verbose) {
+      # Report first-roll tallies by candidate
+      tallies <- paste(sprintf("%s: count=%d sum=%d",
+                               names(choice$info$counts),
+                               as.integer(choice$info$counts),
+                               as.integer(choice$info$sums)),
+                       collapse = " | ")
+      logs <- c(logs,
+                sprintf("First roll: %s", dice_to_string(dice)),
+                sprintf("Remaining targets: %s", paste(remaining_targets, collapse = ", ")),
+                sprintf("Tallies -> %s", tallies),
+                sprintf("Chosen target: %s", target_name))
+    }
+  } else {
+    target_faces <- TARGETS[[target_name]]
+    if (verbose) {
+      logs <- c(logs,
+                sprintf("First roll: %s", dice_to_string(dice)),
+                sprintf("Chosen target (pre-decided): %s", target_name))
+    }
+  }
+  
+  kept <- keep_for_target(dice, target_faces)
+  reroll_count <- 5 - length(kept)
+  if (verbose) {
+    logs <- c(logs,
+              sprintf("Roll 1 keep -> Keeping: %s  Re-roll: %d",
+                      dice_to_string(kept), reroll_count))
+  }
+  
+  # Early success — stop rolling further
+  if (is_success_for_target(dice, target_faces)) {
+    return(list(
+      success = TRUE,
+      category_name = target_name,
+      final_dice = dice,
+      score_if_success = sum(dice),
+      log = logs
+    ))
+  }
+  
+  rolls_used <- 1
+  while (rolls_used < max_rolls) {
+    rolls_used <- rolls_used + 1
+    
+    # Re-roll non-target dice
+    if (reroll_count > 0) {
+      new_dice <- roll_dice(reroll_count)
+      dice <- c(kept, new_dice)
+    }
+    
+    # Update keep
+    kept <- keep_for_target(dice, target_faces)
+    reroll_count <- 5 - length(kept)
+    
+    if (verbose) {
+      logs <- c(logs,
+                sprintf("Roll %d: %s  Keeping: %s  Re-roll: %d",
+                        rolls_used,
+                        dice_to_string(dice),
+                        dice_to_string(kept),
+                        reroll_count))
+    }
+    
+    if (is_success_for_target(dice, target_faces)) {
+      return(list(
+        success = TRUE,
+        category_name = target_name,
+        final_dice = dice,
+        score_if_success = sum(dice),
+        log = logs
+      ))
+    }
+  }
+  
+  # Failed after 3 rolls
+  list(
+    success = FALSE,
+    category_name = target_name,
+    final_dice = dice,
+    score_if_success = NA_integer_,
+    log = logs
+  )
+}
+```
+
+### Simulate one complete streak attempt (3 consecutive Volition-1 turns) 
+Returns list(success, order_played, prebonus_total_if_success, logs)
+
+```{r}
+simulate_single_streak_attempt <- function(max_rolls = 3, verbose = TRUE) {
+  remaining <- c("EVEN", "ODD", "PRIME")
+  logs <- character()
+  prebonus_total <- 0
+  order_played <- character()
+  
+  # Turn 1: choose among all three
+  if (verbose) logs <- c(logs, "=== Turn 1 ===")
+  res1 <- play_single_turn_volition1(remaining_targets = remaining, target_name = NULL,
+                                     max_rolls = max_rolls, verbose = verbose)
+  order_played <- c(order_played, res1$category_name)
+  if (verbose) logs <- c(logs, res1$log)
+  
+  if (!res1$success) {
+    if (verbose) logs <- c(logs, sprintf("Turn 1 FAILED (target: %s). Streak attempt ends.", res1$category_name))
+    return(list(success = FALSE, order_played = order_played, prebonus_total_if_success = NA, logs = logs))
+  }
+  prebonus_total <- prebonus_total + res1$score_if_success
+  remaining <- setdiff(remaining, res1$category_name)
+  if (verbose) logs <- c(logs, sprintf("Turn 1 SUCCESS: %s  Score: %d", res1$category_name, res1$score_if_success), "")
+  
+  # Turn 2: choose among remaining two
+  if (verbose) logs <- c(logs, "=== Turn 2 ===")
+  res2 <- play_single_turn_volition1(remaining_targets = remaining, target_name = NULL,
+                                     max_rolls = max_rolls, verbose = verbose)
+  order_played <- c(order_played, res2$category_name)
+  if (verbose) logs <- c(logs, res2$log)
+  
+  if (!res2$success) {
+    if (verbose) logs <- c(logs, sprintf("Turn 2 FAILED (target: %s). Streak attempt ends.", res2$category_name))
+    return(list(success = FALSE, order_played = order_played, prebonus_total_if_success = NA, logs = logs))
+  }
+  prebonus_total <- prebonus_total + res2$score_if_success
+  remaining <- setdiff(remaining, res2$category_name)
+  if (verbose) logs <- c(logs, sprintf("Turn 2 SUCCESS: %s  Score: %d", res2$category_name, res2$score_if_success), "")
+  
+  # Turn 3: the last remaining category
+  if (verbose) logs <- c(logs, "=== Turn 3 ===")
+  last_cat <- remaining[1]
+  res3 <- play_single_turn_volition1(remaining_targets = remaining, target_name = last_cat,
+                                     max_rolls = max_rolls, verbose = verbose)
+  order_played <- c(order_played, res3$category_name)
+  if (verbose) logs <- c(logs, res3$log)
+  
+  if (!res3$success) {
+    if (verbose) logs <- c(logs, sprintf("Turn 3 FAILED (target: %s). Streak attempt ends.", res3$category_name))
+    return(list(success = FALSE, order_played = order_played, prebonus_total_if_success = NA, logs = logs))
+  }
+  prebonus_total <- prebonus_total + res3$score_if_success
+  if (verbose) logs <- c(logs, sprintf("Turn 3 SUCCESS: %s  Score: %d", res3$category_name, res3$score_if_success), "")
+  
+  list(success = TRUE, order_played = order_played, prebonus_total_if_success = prebonus_total, logs = logs)
+}
+
+```
+
+
+### Batch simulator for many streak attempts 
+print_first controls how many full attempts (all three turns) are printed.
+
+```{r}
+simulate_volition1_streaks <- function(n_attempts = 1000, seed = NULL, print_first = 2) {
+  if (!is.null(seed)) set.seed(seed)
+  
+  successes <- 0L
+  prebonus_totals <- numeric(0)
+  
+  for (i in 1:n_attempts) {
+    verbose <- i <= print_first
+    res <- simulate_single_streak_attempt(max_rolls = 3, verbose = verbose)
+    if (verbose) {
+      cat(sprintf("=== Streak Attempt %d ===\n", i))
+      for (ln in res$logs) cat(ln, "\n")
+      if (res$success) {
+        cat(sprintf("Result: SUCCESS  Order: %s  Pre-bonus total: %d\n\n",
+                    paste(res$order_played, collapse = " -> "),
+                    res$prebonus_total_if_success))
+      } else {
+        cat(sprintf("Result: FAIL     Order so far: %s\n\n",
+                    paste(res$order_played, collapse = " -> ")))
+      }
+    }
+    
+    if (res$success) {
+      successes <- successes + 1L
+      prebonus_totals <- c(prebonus_totals, res$prebonus_total_if_success)
+    }
+  }
+  
+  p_success <- successes / n_attempts
+  avg_prebonus_success <- if (length(prebonus_totals) > 0) mean(prebonus_totals) else NA_real_
+  
+  cat("----- Summary (Volition 1 Streak Attempts) -----\n")
+  cat(sprintf("Attempts: %d\n", n_attempts))
+  cat(sprintf("Successes (3-in-a-row): %d\n", successes))
+  cat(sprintf("Estimated P(streak success): %.4f\n", p_success))
+  cat(sprintf("Average pre-bonus Volition-1 total | success: %s\n",
+              ifelse(is.na(avg_prebonus_success), "NA", sprintf("%.2f", avg_prebonus_success))))
+  
+  invisible(list(
+    attempts = n_attempts,
+    success_count = successes,
+    p_success = p_success,
+    prebonus_totals_success = prebonus_totals,
+    avg_prebonus_success = avg_prebonus_success
+  ))
+}
+```
+
+## Simulations
+
+```{r}
+simulate_volition1_streaks(n_attempts = 3, seed = 7, print_first = 3)
+```
+
+```{r}
+simulate_volition1_streaks(n_attempts = 10000, seed = 123, print_first = 2)
+```
 
