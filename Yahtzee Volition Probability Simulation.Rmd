@@ -1,0 +1,183 @@
+# Yahtzee Volition 1 Simulator
+
+Only Even (2,4,6)
+
+Only Odd (1,3,5)
+
+Only Prime (2,3,5)
+
+Standard Yahtzee: up to 3 rolls per hand
+
+Strategy: keep all dice that are in the target set; re-roll the rest
+
+```{r}
+roll_dice <- function(n) {
+  sample(1:6, size = n, replace = TRUE)
+}
+
+is_success_volition1 <- function(dice, target_faces) {
+  all(dice %in% target_faces)
+}
+
+dice_to_string <- function(d) paste0("[", paste(d, collapse = ","), "]")
+
+```
+
+
+One hand simulation (up to 3 rolls total)
+Returns list(success, final_dice, score_if_success, log)
+
+```{r}
+play_single_hand_volition1 <- function(target_faces = c(2,4,6),
+                                       max_rolls = 3,
+                                       verbose = FALSE) {
+  # Roll 1
+  dice <- roll_dice(5)
+  kept <- dice[dice %in% target_faces]
+  reroll_count <- 5 - length(kept)
+  
+  logs <- character()
+  if (verbose) {
+    logs <- c(logs, sprintf("Roll 1: %s  Keeping: %s  Re-roll: %d",
+                            dice_to_string(dice),
+                            dice_to_string(kept),
+                            reroll_count))
+  }
+  
+  # If already success, we can stop early if you like—but to emulate a real player, the player would stop rolling because category is already satisfied. We'll stop immediately if success is already achieved.
+  if (is_success_volition1(dice, target_faces)) {
+    return(list(
+      success = TRUE,
+      final_dice = dice,
+      score_if_success = sum(dice),
+      log = logs
+    ))
+  }
+  
+  # Rolls 2 and (optionally) 3
+  rolls_used <- 1
+  while (rolls_used < max_rolls) {
+    rolls_used <- rolls_used + 1
+    
+    if (reroll_count > 0) {
+      new_rolls <- roll_dice(reroll_count)
+      dice <- c(kept, new_rolls)
+    }
+    # Apply the same "greedy keep" strategy: keep all target faces
+    kept <- dice[dice %in% target_faces]
+    reroll_count <- 5 - length(kept)
+    
+    if (verbose) {
+      logs <- c(logs, sprintf("Roll %d: %s  Keeping: %s  Re-roll: %d",
+                              rolls_used,
+                              dice_to_string(dice),
+                              dice_to_string(kept),
+                              reroll_count))
+    }
+    
+    # If success achieved early, stop
+    if (is_success_volition1(dice, target_faces)) {
+      return(list(
+        success = TRUE,
+        final_dice = dice,
+        score_if_success = sum(dice),
+        log = logs
+      ))
+    }
+  }
+  
+  # If we reach here after 3 rolls without success:
+  list(
+    success = FALSE,
+    final_dice = dice,
+    score_if_success = NA_integer_,
+    log = logs
+  )
+}
+```
+
+
+# N trials wrapper
+Simulate many hands; print logs for the first `print_first` trials.
+
+```{r}
+simulate_volition1 <- function(n_trials = 1000,
+                               target_faces = c(2,4,6),   # even by default
+                               max_rolls = 3,
+                               seed = NULL,
+                               print_first = 3) {
+  if (!is.null(seed)) set.seed(seed)
+  
+  successes <- 0L
+  scores <- numeric(0)
+  
+  # Print header to orient the reader
+  cat(sprintf("Simulating %d hands targeting faces: %s\n",
+              n_trials, paste(target_faces, collapse = ",")))
+  cat(sprintf("Player strategy: keep %s, re-roll others. Up to %d rolls per hand.\n\n",
+              paste(target_faces, collapse = ","), max_rolls))
+  
+  for (i in 1:n_trials) {
+    res <- play_single_hand_volition1(target_faces = target_faces,
+                                      max_rolls = max_rolls,
+                                      verbose = (i <= print_first))
+    if (i <= print_first) {
+      cat(sprintf("=== Trial %d ===\n", i))
+      for (ln in res$log) cat(ln, "\n")
+      if (res$success) {
+        cat(sprintf("Result: SUCCESS  Final: %s  Score: %d\n\n",
+                    dice_to_string(res$final_dice), res$score_if_success))
+      } else {
+        cat(sprintf("Result: FAIL     Final: %s\n\n",
+                    dice_to_string(res$final_dice)))
+      }
+    }
+    
+    if (res$success) {
+      successes <- successes + 1L
+      scores <- c(scores, res$score_if_success)
+    }
+  }
+  
+  prob <- successes / n_trials
+  avg_score_success <- if (length(scores) > 0) mean(scores) else NA_real_
+  
+  out <- list(
+    target_faces = target_faces,
+    trials = n_trials,
+    success_count = successes,
+    success_prob = prob,
+    avg_score_given_success = avg_score_success
+  )
+  
+  # Summary
+  cat("----- Summary -----\n")
+  cat(sprintf("Target faces: %s\n", paste(target_faces, collapse = ",")))
+  cat(sprintf("Trials: %d\n", n_trials))
+  cat(sprintf("Successes: %d\n", successes))
+  cat(sprintf("Estimated P(success): %.4f\n", prob))
+  cat(sprintf("Average score | success: %s\n",
+              ifelse(is.na(avg_score_success), "NA", sprintf("%.2f", avg_score_success))))
+  
+  invisible(out)
+}
+```
+
+## Simulations
+
+Even
+```{r}
+simulate_volition1(n_trials = 1000, target_faces = c(2,4,6), seed = 123, print_first = 3)
+```
+
+Odd
+```{r}
+simulate_volition1(n_trials = 1000, target_faces = c(1,3,5), seed = 123, print_first = 3)
+```
+
+Prime
+```{r}
+simulate_volition1(n_trials = 1000, target_faces = c(2,3,5), seed = 123, print_first = 3)
+```
+
+
